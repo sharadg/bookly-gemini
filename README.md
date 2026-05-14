@@ -12,7 +12,9 @@ customization surface. Start with `config.py`, then `prompts.py`, then
 
 ```
 bookly-gemini/
-├── main.py              # CLI entry — --text (default) or --voice
+├── main.py              # CLI entry — --text (default), --voice, or --web
+├── web_server.py        # FastAPI + WebSocket bridge for browser voice UI
+├── web/                 # Static assets (index.html, app.js, styles.css)
 ├── orchestration.py     # Gemini Live session loop (the only file that
 │                        # talks to the API). Hook insertion points are
 │                        # marked ▶▶▶.
@@ -52,9 +54,12 @@ brew install portaudio
 
 ```bash
 python main.py            # text chat
-python main.py --voice    # bidirectional Gemini Live audio
+python main.py --voice    # bidirectional Gemini Live audio (CLI mic/speaker)
+python main.py --web      # same Live session in the browser (http://127.0.0.1:8765/)
 python test_smoke.py      # offline tests (no API key needed)
 ```
+
+For `--web`, set `BOOKLY_WEB_HOST` / `BOOKLY_WEB_PORT` if you need a different bind address. Use Chrome or Edge and allow microphone access when prompted.
 
 ## Customization map
 

@@ -77,14 +77,18 @@ async def voice_ws(websocket: WebSocket) -> None:
         try:
             while True:
                 msg = await websocket.receive()
-                if msg.get("type") == "websocket.disconnect":
+                mtype = msg.get("type")
+                if mtype == "websocket.disconnect":
                     break
-                if msg.get("bytes"):
+                if mtype != "websocket.receive":
+                    continue
+                if msg.get("bytes") is not None:
                     b = msg["bytes"]
-                    try:
-                        in_q.put_nowait(b)
-                    except asyncio.QueueFull:
-                        pass
+                    if b:
+                        try:
+                            in_q.put_nowait(b)
+                        except asyncio.QueueFull:
+                            pass
                 elif msg.get("text"):
                     try:
                         data = json.loads(msg["text"])
@@ -94,6 +98,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                         break
         except WebSocketDisconnect:
             pass
+        except asyncio.CancelledError:
+            raise
         finally:
             try:
                 in_q.put_nowait(None)

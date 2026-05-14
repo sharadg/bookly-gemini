@@ -4,13 +4,15 @@ Bookly Gemini Live agent — CLI entry point.
 Usage:
     export GOOGLE_API_KEY=...
     python main.py            # text mode (default)
-    python main.py --voice    # full Gemini Live bidi audio
+    python main.py --voice    # full Gemini Live bidi audio (CLI)
+    python main.py --web      # voice in the browser (local server)
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 
 from orchestration import BooklyLiveAgent
@@ -22,6 +24,11 @@ def parse() -> argparse.Namespace:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--text", action="store_true", help="text chat (default)")
     mode.add_argument("--voice", action="store_true", help="voice chat (bidi audio)")
+    p.add_argument(
+        "--web",
+        action="store_true",
+        help="browser voice UI (local FastAPI server; set BOOKLY_WEB_HOST / BOOKLY_WEB_PORT)",
+    )
     return p.parse_args()
 
 
@@ -37,6 +44,14 @@ async def amain(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse()
+    if args.web:
+        import uvicorn
+
+        host = os.environ.get("BOOKLY_WEB_HOST", "127.0.0.1")
+        port = int(os.environ.get("BOOKLY_WEB_PORT", "8765"))
+        print(f"\nBookly web voice UI: http://{host}:{port}/\n")
+        uvicorn.run("web_server:app", host=host, port=port, reload=False)
+        return 0
     try:
         return asyncio.run(amain(args))
     except KeyboardInterrupt:
