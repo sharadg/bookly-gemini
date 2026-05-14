@@ -14,8 +14,8 @@ TODAY = datetime(2026, 5, 12)
 
 
 CUSTOMERS = {
-    "sharad@example.com": {"name": "Sharad", "customer_id": "C-1001"},
-    "alex@example.com":   {"name": "Alex",   "customer_id": "C-1002"},
+    "john@myspace.com": {"name": "John Stewart", "customer_id": "C-1001"},
+    "jimmy@hotmail.com":   {"name": "Jimmy Kimmel",   "customer_id": "C-1002"},
 }
 
 
