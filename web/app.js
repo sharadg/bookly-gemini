@@ -6,6 +6,8 @@
 const INPUT_RATE = 16000;
 const OUTPUT_RATE = 24000;
 
+const MEMORY_KEY = "bookly_web_session_memory";
+
 const $ = (id) => document.getElementById(id);
 
 function setStatus(mode) {
@@ -47,6 +49,27 @@ function appendDebug(msg) {
   }
   log.appendChild(row);
   log.scrollTop = log.scrollHeight;
+}
+
+function loadSavedSessionMemory() {
+  try {
+    const raw = localStorage.getItem(MEMORY_KEY);
+    if (!raw) {
+      return null;
+    }
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSessionMemory(mem) {
+  try {
+    localStorage.setItem(MEMORY_KEY, JSON.stringify(mem));
+  } catch {
+    /* ignore quota / private mode */
+  }
 }
 
 function resampleFloat32(input, inputRate, outputRate) {
@@ -174,10 +197,6 @@ async function startVoice() {
   $("btnStart").disabled = true;
   $("btnStop").disabled = false;
   $("log").innerHTML = "";
-  const dbg = $("debugLog");
-  if (dbg) {
-    dbg.innerHTML = "";
-  }
   $("greeting").textContent = "Connecting…";
   $("greeting").classList.add("muted");
 
@@ -201,6 +220,8 @@ async function startVoice() {
         appendLog(`Error: ${msg.message}`, "line system");
       } else if (msg.type === "debug") {
         appendDebug(msg);
+      } else if (msg.type === "session_state" && msg.memory) {
+        persistSessionMemory(msg.memory);
       }
     } catch {
       /* ignore */
