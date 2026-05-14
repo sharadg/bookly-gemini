@@ -1,12 +1,19 @@
 :root {
-  --bg: #1a1714;
-  --card: #252019;
-  --border: #3d3428;
-  --text: #f2ebe3;
-  --muted: #a89b8c;
-  --accent: #c4956a;
-  --accent-dim: #8a6548;
-  --live: #6bbf8a;
+  --bg: #0c1220;
+  --bg-glow: #152238;
+  --card: #141c2e;
+  --surface: #1c2638;
+  --surface-deep: #111827;
+  --border: #2a3a55;
+  --border-soft: #3d4f6e;
+  --text: #e8eef8;
+  --muted: #8fa3bd;
+  --accent: #5ec8d4;
+  --accent-dim: #3a9daa;
+  --accent-text: #062028;
+  --live: #6ee7b7;
+  --live-bg: rgba(110, 231, 183, 0.14);
+  --shadow: rgba(8, 16, 32, 0.45);
   --font: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -18,7 +25,9 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(120% 80% at 50% 0%, #2d2620 0%, var(--bg) 55%);
+  background:
+    radial-gradient(100% 70% at 50% -10%, var(--bg-glow) 0%, transparent 55%),
+    linear-gradient(180deg, #0a0f18 0%, var(--bg) 40%, #080c14 100%);
   color: var(--text);
   font-family: var(--sans);
   font-size: 1rem;
@@ -51,7 +60,7 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 16px 48px var(--shadow);
 }
 
 .toolbar {
@@ -69,13 +78,15 @@ body {
 }
 
 .pill.idle {
-  background: #333;
+  background: var(--surface);
   color: var(--muted);
+  border: 1px solid var(--border);
 }
 
 .pill.live {
-  background: rgba(107, 191, 138, 0.2);
+  background: var(--live-bg);
   color: var(--live);
+  border: 1px solid rgba(110, 231, 183, 0.35);
 }
 
 .actions {
@@ -89,8 +100,8 @@ body {
   font: inherit;
   padding: 0.55rem 1.1rem;
   border-radius: 8px;
-  border: 1px solid var(--border);
-  background: #2f2820;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
 }
@@ -102,8 +113,8 @@ body {
 
 .btn.primary {
   background: linear-gradient(180deg, var(--accent) 0%, var(--accent-dim) 100%);
-  border-color: #5c4030;
-  color: #1a120c;
+  border-color: #2d7a86;
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -136,7 +147,7 @@ body {
   max-height: 14rem;
   overflow-y: auto;
   padding: 0.65rem 0.75rem;
-  background: #1c1814;
+  background: var(--surface-deep);
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.9rem;
