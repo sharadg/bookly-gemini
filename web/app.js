@@ -29,6 +29,26 @@ function appendLog(text, cls = "line") {
   log.scrollTop = log.scrollHeight;
 }
 
+function appendDebug(msg) {
+  const log = $("debugLog");
+  if (!log) {
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "debug-line";
+  const kind = msg.kind;
+  if (kind === "tool_call") {
+    const blocked = msg.blocked ? " [blocked]" : "";
+    row.textContent = `→ ${msg.name}${blocked} ${JSON.stringify(msg.args ?? {})}`;
+  } else if (kind === "tool_response") {
+    row.textContent = `← ${msg.name} ${JSON.stringify(msg.output)}`;
+  } else {
+    row.textContent = JSON.stringify(msg);
+  }
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
 function resampleFloat32(input, inputRate, outputRate) {
   if (inputRate === outputRate) {
     return input;
@@ -154,6 +174,10 @@ async function startVoice() {
   $("btnStart").disabled = true;
   $("btnStop").disabled = false;
   $("log").innerHTML = "";
+  const dbg = $("debugLog");
+  if (dbg) {
+    dbg.innerHTML = "";
+  }
   $("greeting").textContent = "Connecting…";
   $("greeting").classList.add("muted");
 
@@ -175,6 +199,8 @@ async function startVoice() {
         appendLog(msg.text, "line agent");
       } else if (msg.type === "error") {
         appendLog(`Error: ${msg.message}`, "line system");
+      } else if (msg.type === "debug") {
+        appendDebug(msg);
       }
     } catch {
       /* ignore */

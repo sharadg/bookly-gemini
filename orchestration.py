@@ -35,6 +35,27 @@ from tools import (
 )
 
 
+def _put_debug(
+    q: asyncio.Queue[dict[str, Any]] | None, payload: dict[str, Any],
+) -> None:
+    if q is None:
+        return
+    try:
+        q.put_nowait(payload)
+    except asyncio.QueueFull:
+        pass
+
+
+def _jsonish(value: Any) -> Any:
+    """Best-effort JSON-serializable value for debug payloads."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
 # ────────────────────────────────────────────────────────────────────────── #
 #  Build the Gemini Live config once.                                       #
 # ────────────────────────────────────────────────────────────────────────── #
@@ -156,13 +177,16 @@ class BooklyLiveAgent:
         speaker: Any,
         *,
         text_out: asyncio.Queue[str] | None = None,
+        debug_out: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> None:
         """Drive the same Live AUDIO session as :meth:`run_voice`, but read
         PCM input from ``mic_frames`` and play output through ``speaker``
         (anything with a synchronous ``write(bytes)`` method — e.g.
         :class:`voice_io.Speaker` or a queue-backed bridge for the web UI).
         Optional ``text_out`` receives assistant text chunks (transcript /
-        captions) when the model sends text alongside audio."""
+        captions) when the model sends text alongside audio.
+        Optional ``debug_out`` receives structured tool-call / tool-response
+        events for developer UIs (e.g. the browser debug panel)."""
 
         cfg = _build_live_config("AUDIO")
         async with self.client.aio.live.connect(
@@ -179,7 +203,11 @@ class BooklyLiveAgent:
 
             async def receive() -> None:
                 await self._consume_turn(
-                    live, speaker=speaker, loop=True, text_out=text_out,
+                    live,
+                    speaker=speaker,
+                    loop=True,
+                    text_out=text_out,
+                    debug_out=debug_out,
                 )
 
             mic_task = asyncio.create_task(stream_mic())
@@ -213,6 +241,7 @@ class BooklyLiveAgent:
         self, live, *, print_text: bool = False,
         speaker=None, loop: bool = False,
         text_out: asyncio.Queue[str] | None = None,
+        debug_out: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> None:
         # Count only tool-call *batches* from the server. Do not count every
         # `live.receive()` message: AUDIO mode streams many small chunks per
@@ -227,7 +256,9 @@ class BooklyLiveAgent:
                 if tool_iters > config.MAX_TOOL_ITERS_PER_TURN:
                     log_event("iter_cap_hit", tool_iters=tool_iters)
                     break
-                await self._handle_tool_call(live, response.tool_call)
+                await self._handle_tool_call(
+                    live, response.tool_call, debug_out=debug_out,
+                )
                 continue
 
             sc = getattr(response, "server_content", None)
@@ -268,7 +299,11 @@ class BooklyLiveAgent:
     # ────────────────────────────────────────────────────────────── #
     #  Tool-call handler
     # ────────────────────────────────────────────────────────────── #
-    async def _handle_tool_call(self, live, tool_call: Any) -> None:
+    async def _handle_tool_call(
+        self, live, tool_call: Any,
+        *,
+        debug_out: asyncio.Queue[dict[str, Any]] | None = None,
+    ) -> None:
         responses: list[types.FunctionResponse] = []
         for fc in tool_call.function_calls:
             args = dict(fc.args or {})
@@ -279,16 +314,37 @@ class BooklyLiveAgent:
                 log_event("guardrail_block",
                           phase="pre_tool_call",
                           tool=fc.name, reason=d.reason)
+                blocked_out = json.dumps({
+                    "ok": False, "error_code": "blocked_by_policy",
+                    "message": d.speak_instead or "Tool blocked.",
+                })
+                _put_debug(debug_out, {
+                    "type": "debug",
+                    "kind": "tool_call",
+                    "name": fc.name,
+                    "args": args,
+                    "blocked": True,
+                    "reason": d.reason,
+                })
+                _put_debug(debug_out, {
+                    "type": "debug",
+                    "kind": "tool_response",
+                    "name": fc.name,
+                    "output": json.loads(blocked_out),
+                })
                 responses.append(types.FunctionResponse(
                     id=fc.id, name=fc.name,
-                    response={"output": json.dumps({
-                        "ok": False, "error_code": "blocked_by_policy",
-                        "message": d.speak_instead or "Tool blocked.",
-                    })},
+                    response={"output": blocked_out},
                 ))
                 continue
 
             log_tool_call(fc.name, args)
+            _put_debug(debug_out, {
+                "type": "debug",
+                "kind": "tool_call",
+                "name": fc.name,
+                "args": args,
+            })
             raw = dispatch(self.session, fc.name, d.payload or args)
 
             # ▶▶▶ Hook: post_tool_call
@@ -297,6 +353,13 @@ class BooklyLiveAgent:
             )
             scrubbed = d2.payload if d2.allow else raw
             log_tool_result(fc.name, scrubbed)
+
+            _put_debug(debug_out, {
+                "type": "debug",
+                "kind": "tool_response",
+                "name": fc.name,
+                "output": _jsonish(scrubbed),
+            })
 
             responses.append(types.FunctionResponse(
                 id=fc.id, name=fc.name,

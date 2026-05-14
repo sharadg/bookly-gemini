@@ -17,6 +17,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -71,6 +72,7 @@ async def voice_ws(websocket: WebSocket) -> None:
     in_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=128)
     pcm_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=256)
     text_out: asyncio.Queue[str] = asyncio.Queue(maxsize=64)
+    debug_out: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=128)
     speaker = _QueuePCMSpeaker(pcm_q)
 
     async def ws_reader() -> None:
@@ -128,9 +130,20 @@ async def voice_ws(websocket: WebSocket) -> None:
         except Exception:
             return
 
+    async def debug_pump() -> None:
+        try:
+            while True:
+                payload = await debug_out.get()
+                await websocket.send_json(payload)
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            raise
+        except Exception:
+            return
+
     t_reader = asyncio.create_task(ws_reader())
     t_pcm = asyncio.create_task(pcm_pump())
     t_txt = asyncio.create_task(text_pump())
+    t_dbg = asyncio.create_task(debug_pump())
 
     try:
         agent = BooklyLiveAgent(modality="AUDIO")
@@ -138,6 +151,7 @@ async def voice_ws(websocket: WebSocket) -> None:
             _queue_mic_iter(in_q),
             speaker,
             text_out=text_out,
+            debug_out=debug_out,
         )
     except Exception as e:
         try:
@@ -146,13 +160,15 @@ async def voice_ws(websocket: WebSocket) -> None:
             pass
         raise
     finally:
-        for t in (t_reader, t_pcm, t_txt):
+        for t in (t_reader, t_pcm, t_txt, t_dbg):
             t.cancel()
         try:
             pcm_q.put_nowait(None)
         except Exception:
             pass
-        await asyncio.gather(t_reader, t_pcm, t_txt, return_exceptions=True)
+        await asyncio.gather(
+            t_reader, t_pcm, t_txt, t_dbg, return_exceptions=True,
+        )
 
 
 def main() -> None:
