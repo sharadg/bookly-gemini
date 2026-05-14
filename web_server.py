@@ -73,7 +73,11 @@ async def voice_ws(websocket: WebSocket) -> None:
     pcm_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=256)
     text_out: asyncio.Queue[str] = asyncio.Queue(maxsize=64)
     debug_out: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=128)
+    session_out: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=32)
+    restore_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
     speaker = _QueuePCMSpeaker(pcm_q)
+
+    agent = BooklyLiveAgent(modality="AUDIO")
 
     async def ws_reader() -> None:
         try:
@@ -95,6 +99,19 @@ async def voice_ws(websocket: WebSocket) -> None:
                     try:
                         data = json.loads(msg["text"])
                     except json.JSONDecodeError:
+                        continue
+                    if data.get("type") == "session_restore":
+                        mem = data.get("memory")
+                        if isinstance(mem, dict):
+                            while True:
+                                try:
+                                    restore_q.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    break
+                            try:
+                                restore_q.put_nowait(mem)
+                            except asyncio.QueueFull:
+                                pass
                         continue
                     if data.get("type") == "stop":
                         break
@@ -140,18 +157,30 @@ async def voice_ws(websocket: WebSocket) -> None:
         except Exception:
             return
 
+    async def session_pump() -> None:
+        try:
+            while True:
+                payload = await session_out.get()
+                await websocket.send_json(payload)
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            raise
+        except Exception:
+            return
+
     t_reader = asyncio.create_task(ws_reader())
     t_pcm = asyncio.create_task(pcm_pump())
     t_txt = asyncio.create_task(text_pump())
     t_dbg = asyncio.create_task(debug_pump())
+    t_sess = asyncio.create_task(session_pump())
 
     try:
-        agent = BooklyLiveAgent(modality="AUDIO")
         await agent.run_voice_with_streams(
             _queue_mic_iter(in_q),
             speaker,
             text_out=text_out,
             debug_out=debug_out,
+            session_out=session_out,
+            restore_q=restore_q,
         )
     except Exception as e:
         try:
@@ -160,14 +189,14 @@ async def voice_ws(websocket: WebSocket) -> None:
             pass
         raise
     finally:
-        for t in (t_reader, t_pcm, t_txt, t_dbg):
+        for t in (t_reader, t_pcm, t_txt, t_dbg, t_sess):
             t.cancel()
         try:
             pcm_q.put_nowait(None)
         except Exception:
             pass
         await asyncio.gather(
-            t_reader, t_pcm, t_txt, t_dbg, return_exceptions=True,
+            t_reader, t_pcm, t_txt, t_dbg, t_sess, return_exceptions=True,
         )
 
 
