@@ -30,3 +30,4 @@ htmlcov/
 
 # Default session transcript (config: BOOKLY_TRANSCRIPT)
 session.jsonl
+.DS_Store

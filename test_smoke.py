@@ -38,7 +38,7 @@ def main():
     r = call(s, "lookup_order", order_id="BK-48201")
     check("order lookup blocked before verification",
           not r["ok"] and r["error_code"] == "not_verified")
-    r = call(s, "verify_customer", email="sharad@example.com")
+    r = call(s, "verify_customer", email="john@myspace.com")
     check("known email accepted", r["ok"])
     r = call(s, "lookup_order", order_id="BK-48201")
     check("own order accessible", r["ok"] and r["status"] == "shipped")

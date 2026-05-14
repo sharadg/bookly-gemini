@@ -10,6 +10,7 @@ To add a tool in this family:
 
 from __future__ import annotations
 
+import identity_cache
 from data import CUSTOMERS, ORDERS
 from ._registry import Session, tool, ok, err
 
@@ -44,6 +45,10 @@ def verify_customer(session: Session, email: str) -> str:
         )
     session.verified_email = email
     session.verified_customer_id = customer["customer_id"]
+    # Write-through to the server-side cache so a browser refresh or new
+    # tab doesn't force the customer to re-verify. See identity_cache.py
+    # for why this is safe (browser cannot write to this cache).
+    identity_cache.record(email, customer["customer_id"])
     return ok(customer_name=customer["name"], verified=True)
 
 
