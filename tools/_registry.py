@@ -24,6 +24,14 @@ from typing import Any, Callable
 class Session:
     """Per-conversation state passed to every tool call."""
 
+    _MEMORY_KEYS = frozenset({
+        "verified_email",
+        "verified_customer_id",
+        "last_order_id",
+        "failed_turns",
+        "escalated",
+    })
+
     def __init__(self) -> None:
         self.verified_email: str | None = None
         self.verified_customer_id: str | None = None
@@ -33,6 +41,34 @@ class Session:
 
     def is_verified(self) -> bool:
         return self.verified_customer_id is not None
+
+    def memory_snapshot(self) -> dict[str, Any]:
+        """JSON-serializable state for web client persistence."""
+        return {
+            "verified_email": self.verified_email,
+            "verified_customer_id": self.verified_customer_id,
+            "last_order_id": self.last_order_id,
+            "failed_turns": self.failed_turns,
+            "escalated": self.escalated,
+        }
+
+    def apply_memory_snapshot(self, data: dict[str, Any]) -> None:
+        """Apply saved browser memory; unknown keys ignored."""
+        for key in self._MEMORY_KEYS:
+            if key not in data:
+                continue
+            val = data[key]
+            if key in {"verified_email", "verified_customer_id", "last_order_id"}:
+                if val is None or isinstance(val, str):
+                    setattr(self, key, val)
+            elif key == "failed_turns":
+                if isinstance(val, bool):
+                    continue
+                if isinstance(val, int) and val >= 0:
+                    self.failed_turns = val
+            elif key == "escalated":
+                if isinstance(val, bool):
+                    self.escalated = val
 
 
 # ────────────────────────────────────────────────────────────────────────── #

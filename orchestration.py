@@ -56,13 +56,81 @@ def _jsonish(value: Any) -> Any:
     return value
 
 
+def _session_memory_hint(session: Session) -> str | None:
+    """Short system addendum so the model does not re-ask for stored facts."""
+    parts: list[str] = []
+    if session.verified_email and session.verified_customer_id:
+        parts.append(
+            "Customer is already verified for this browser session: "
+            f"email {session.verified_email}, "
+            f"internal customer_id {session.verified_customer_id}. "
+            "Do not ask for their email or to look up their account again "
+            "unless they say they are a different customer or account."
+        )
+    if session.last_order_id:
+        parts.append(
+            f"Last order referenced in this browser session: {session.last_order_id}."
+        )
+    if session.escalated:
+        parts.append(
+            "An escalation was already opened in this browser session."
+        )
+    if not parts:
+        return None
+    return (
+        "Browser session memory (trust for continuity; user may correct):\n"
+        + "\n".join(parts)
+    )
+
+
+def _put_session_state(
+    q: asyncio.Queue[dict[str, Any]] | None, session: Session,
+) -> None:
+    if q is None:
+        return
+    payload = {
+        "type": "session_state",
+        "memory": session.memory_snapshot(),
+    }
+    try:
+        q.put_nowait(payload)
+    except asyncio.QueueFull:
+        pass
+
+
+async def _drain_web_memory_restore(
+    agent: BooklyLiveAgent,
+    restore_q: asyncio.Queue[dict[str, Any]] | None,
+) -> None:
+    """Apply at most one queued client memory snapshot before Live connect."""
+    if restore_q is None:
+        return
+    snap: dict[str, Any] | None = None
+    try:
+        snap = restore_q.get_nowait()
+    except asyncio.QueueEmpty:
+        pass
+    if snap is None:
+        try:
+            snap = await asyncio.wait_for(restore_q.get(), timeout=0.6)
+        except asyncio.TimeoutError:
+            return
+    if snap:
+        agent.session.apply_memory_snapshot(snap)
+
+
 # ────────────────────────────────────────────────────────────────────────── #
 #  Build the Gemini Live config once.                                       #
 # ────────────────────────────────────────────────────────────────────────── #
-def _build_live_config(response_modality: str) -> types.LiveConnectConfig:
+def _build_live_config(
+    response_modality: str,
+    *,
+    memory_hint: str | None = None,
+) -> types.LiveConnectConfig:
     """`response_modality` is "AUDIO" or "TEXT". Both share the same
     system prompt, tools, and safety knobs — only the output channel
-    differs."""
+    differs. Optional ``memory_hint`` adds a second system part for
+    restored browser session context (web voice)."""
 
     declarations = [
         types.FunctionDeclaration(**fd) for fd in function_declarations()
@@ -76,11 +144,13 @@ def _build_live_config(response_modality: str) -> types.LiveConnectConfig:
         )
     )
 
+    parts: list[types.Part] = [types.Part(text=SYSTEM_PROMPT)]
+    if memory_hint:
+        parts.append(types.Part(text=memory_hint))
+
     return types.LiveConnectConfig(
         response_modalities=[response_modality],
-        system_instruction=types.Content(
-            parts=[types.Part(text=SYSTEM_PROMPT)],
-        ),
+        system_instruction=types.Content(parts=parts),
         tools=[types.Tool(function_declarations=declarations)],
         speech_config=speech_config if response_modality == "AUDIO" else None,
     )
@@ -178,6 +248,8 @@ class BooklyLiveAgent:
         *,
         text_out: asyncio.Queue[str] | None = None,
         debug_out: asyncio.Queue[dict[str, Any]] | None = None,
+        session_out: asyncio.Queue[dict[str, Any]] | None = None,
+        restore_q: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> None:
         """Drive the same Live AUDIO session as :meth:`run_voice`, but read
         PCM input from ``mic_frames`` and play output through ``speaker``
@@ -186,9 +258,16 @@ class BooklyLiveAgent:
         Optional ``text_out`` receives assistant text chunks (transcript /
         captions) when the model sends text alongside audio.
         Optional ``debug_out`` receives structured tool-call / tool-response
-        events for developer UIs (e.g. the browser debug panel)."""
+        events for developer UIs (e.g. the browser debug panel).
+        Optional ``session_out`` pushes ``session_state`` after tool batches
+        so the browser can persist :class:`~tools.Session` fields.
+        Optional ``restore_q`` receives at most one client memory snapshot
+        before connecting to Live (web voice)."""
 
-        cfg = _build_live_config("AUDIO")
+        await _drain_web_memory_restore(self, restore_q)
+        _put_session_state(session_out, self.session)
+        hint = _session_memory_hint(self.session)
+        cfg = _build_live_config("AUDIO", memory_hint=hint)
         async with self.client.aio.live.connect(
             model=config.MODEL, config=cfg
         ) as live:
@@ -208,6 +287,7 @@ class BooklyLiveAgent:
                     loop=True,
                     text_out=text_out,
                     debug_out=debug_out,
+                    session_out=session_out,
                 )
 
             mic_task = asyncio.create_task(stream_mic())
@@ -242,6 +322,7 @@ class BooklyLiveAgent:
         speaker=None, loop: bool = False,
         text_out: asyncio.Queue[str] | None = None,
         debug_out: asyncio.Queue[dict[str, Any]] | None = None,
+        session_out: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> None:
         # Count only tool-call *batches* from the server. Do not count every
         # `live.receive()` message: AUDIO mode streams many small chunks per
@@ -257,7 +338,10 @@ class BooklyLiveAgent:
                     log_event("iter_cap_hit", tool_iters=tool_iters)
                     break
                 await self._handle_tool_call(
-                    live, response.tool_call, debug_out=debug_out,
+                    live,
+                    response.tool_call,
+                    debug_out=debug_out,
+                    session_out=session_out,
                 )
                 continue
 
@@ -303,6 +387,7 @@ class BooklyLiveAgent:
         self, live, tool_call: Any,
         *,
         debug_out: asyncio.Queue[dict[str, Any]] | None = None,
+        session_out: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> None:
         responses: list[types.FunctionResponse] = []
         for fc in tool_call.function_calls:
@@ -367,3 +452,4 @@ class BooklyLiveAgent:
             ))
 
         await live.send_tool_response(function_responses=responses)
+        _put_session_state(session_out, self.session)
