@@ -33,6 +33,8 @@ bookly-gemini/
 │                        #     points in every turn
 ├── intent_router.py     # 📌 CUSTOMIZATION: optional pre-LLM router
 ├── observability.py     # 📌 CUSTOMIZATION: swap _emit() for your sink
+├── identity_cache.py    # Server-side verify_customer result (hydrates new
+│                        #     Live sessions in-process; not client-writable)
 │
 ├── voice_io.py          # Mic + speaker (PCM streams)
 ├── data.py              # Mock backend
@@ -45,10 +47,21 @@ bookly-gemini/
 ```bash
 pip install -r requirements.txt
 export GOOGLE_API_KEY=...      # or GEMINI_API_KEY
+# Optional: put the same keys in a project-root .env — config.py loads it
+# automatically via python-dotenv.
 
 # macOS voice mode also needs:
 brew install portaudio
 ```
+
+### Environment overrides (optional)
+
+| Variable | Purpose |
+|----------|---------|
+| `BOOKLY_MODEL` | Gemini Live model id (default in `config.py` is `gemini-3.1-flash-live-preview`) |
+| `BOOKLY_VOICE` | Live voice name (e.g. `Zephyr`) |
+| `BOOKLY_WEB_HOST` / `BOOKLY_WEB_PORT` | Bind address for `--web` (defaults `127.0.0.1` / `8765`) |
+| `BOOKLY_TRANSCRIPT` | Path for JSONL session log from `observability._emit` (default `session.jsonl`; empty disables) |
 
 ## Run
 
@@ -59,13 +72,15 @@ python main.py --web      # same Live session in the browser (http://127.0.0.1:8
 python test_smoke.py      # offline tests (no API key needed)
 ```
 
-For `--web`, set `BOOKLY_WEB_HOST` / `BOOKLY_WEB_PORT` if you need a different bind address. Use Chrome or Edge and allow microphone access when prompted.
+For `--web`, set `BOOKLY_WEB_HOST` / `BOOKLY_WEB_PORT` if you need a different bind address. Use Chrome or Edge and allow microphone access when prompted. The page includes a **debug log** of tool calls and responses (streamed from the server over the same WebSocket).
+
+After a successful `verify_customer`, the server keeps a **short-lived identity cache** (`identity_cache.py`): a new browser tab or refresh opens a fresh Gemini Live session, but the customer does not have to re-verify until the Python process restarts (demo scope; production would use an opaque token).
 
 ## Customization map
 
 If you want to change…              | Edit
 ------------------------------------|----------------------------
-the model or voice                  | `config.py` → `MODEL`, `VOICE`
+the model or voice                  | `config.py` → `MODEL`, `VOICE` (or `BOOKLY_MODEL` / `BOOKLY_VOICE`)
 how long the return window is       | `config.py` → `RETURN_WINDOW_DAYS`
 the agent's tone or rules           | `prompts.py` → `RULES` / `TONE`
 add a new capability (e.g. cancel)  | new file in `tools/`, decorate with `@tool(...)`
@@ -74,6 +89,7 @@ catch prompt-injection patterns     | `guardrails.py` → `PROMPT_INJECTION_PATT
 filter the agent's responses        | `guardrails.py` → `pre_agent_response`
 ship events to Datadog/OTLP         | `observability.py` → `_emit`
 route by intent before the LLM      | `intent_router.py` → `ENABLED = True`
+how post-verify identity persists   | `identity_cache.py` (in-process demo; replace with token store in prod)
 
 ## Hook execution order (per user turn)
 
@@ -130,7 +146,7 @@ model can't bypass a rule by being clever in prose).
 | Multi-turn interaction        | Return flow: order → eligibility → confirmation → RMA |
 | Tool use                      | 5 tools registered; see `tools/` |
 | Clarifying question           | "I have a problem with my order" → asks for order ID + email instead of guessing |
-| Identity verification         | Order data refused until `verify_customer` succeeds — enforced server-side |
+| Identity verification         | Order data refused until `verify_customer` succeeds — enforced server-side; same process reuses verification via `identity_cache` |
 | Policy refusal                | 45-day-old return rejected by `get_return_eligibility` |
 | Guardrail enforcement         | Prompt-injection patterns blocked in `pre_user_text`; forbidden claims blocked in `pre_agent_response` |
 | Graceful escalation           | `escalate_to_human` with summary; auto-trigger after 2 failed turns |
@@ -141,7 +157,11 @@ model can't bypass a rule by being clever in prose).
    layer; the prototype asks for the email on file.
 2. Knowledge base is keyword scoring over five hand-written articles.
    Production replaces `search_help_center` with a vector retriever.
-3. Single-session memory only. `Session` dies with the process.
-4. The Gemini Live model name in `config.py` (`gemini-2.0-flash-live-001`)
-   is current as of this writing; the preview "native-audio-dialog"
-   variant is available via env override.
+3. Each WebSocket / CLI run opens a new Gemini Live session (no client-side
+   transcript replay). The in-process `Session` object and Live context end
+   when that connection ends. Verified identity can still **hydrate** into a
+   new session from `identity_cache` until the server exits. Optional JSONL
+   transcript: `BOOKLY_TRANSCRIPT` / `config.TRANSCRIPT_PATH`.
+4. Default Live model is `gemini-3.1-flash-live-preview` in `config.py`;
+   override with `BOOKLY_MODEL` (e.g. `gemini-2.0-flash-live-001` or preview
+   native-audio ids when your account supports them).
