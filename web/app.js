@@ -244,6 +244,15 @@ async function startVoice() {
     );
   });
 
+  const saved = loadSavedSessionMemory();
+  if (saved && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: "session_restore", memory: saved }));
+    } catch {
+      /* ignore */
+    }
+  }
+
   const pctx = ensurePlayContext();
   if (pctx.state === "suspended") {
     await pctx.resume();
