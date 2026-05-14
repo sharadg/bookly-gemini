@@ -1,19 +1,21 @@
 :root {
-  --bg: #0c1220;
-  --bg-glow: #152238;
-  --card: #141c2e;
-  --surface: #1c2638;
-  --surface-deep: #111827;
-  --border: #2a3a55;
-  --border-soft: #3d4f6e;
-  --text: #e8eef8;
-  --muted: #8fa3bd;
-  --accent: #5ec8d4;
-  --accent-dim: #3a9daa;
-  --accent-text: #062028;
-  --live: #6ee7b7;
-  --live-bg: rgba(110, 231, 183, 0.14);
-  --shadow: rgba(8, 16, 32, 0.45);
+  /* "Paper" — warm cream background, deep ink text, terracotta accent.
+     Bookstore-feeling light mode. */
+  --bg: #f5f1e8;            /* warm paper, body background */
+  --bg-glow: #ebe4d3;       /* slightly warmer cream for the top radial glow */
+  --card: #ffffff;          /* clean white card */
+  --surface: #efe9dc;       /* light cream for default buttons / pills */
+  --surface-deep: #ece6d7;  /* deeper cream for the inset log area */
+  --border: #d9d1c0;        /* paper border on cards */
+  --border-soft: #c4bba8;   /* softer border on buttons */
+  --text: #1a1a2e;          /* deep ink */
+  --muted: #6c7693;         /* slate, for secondary text */
+  --accent: #b85042;        /* terracotta */
+  --accent-dim: #8e3f33;    /* darker terracotta for the primary-button gradient */
+  --accent-text: #ffffff;   /* white text on the terracotta button */
+  --live: #2c5f2d;          /* forest green, signals the live-session state */
+  --live-bg: rgba(44, 95, 45, 0.12);
+  --shadow: rgba(58, 47, 32, 0.12);
   --font: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -27,7 +29,7 @@ body {
   min-height: 100vh;
   background:
     radial-gradient(100% 70% at 50% -10%, var(--bg-glow) 0%, transparent 55%),
-    linear-gradient(180deg, #0a0f18 0%, var(--bg) 40%, #080c14 100%);
+    linear-gradient(180deg, #faf7f0 0%, var(--bg) 40%, #ece6d7 100%);
   color: var(--text);
   font-family: var(--sans);
   font-size: 1rem;
@@ -86,7 +88,7 @@ body {
 .pill.live {
   background: var(--live-bg);
   color: var(--live);
-  border: 1px solid rgba(110, 231, 183, 0.35);
+  border: 1px solid rgba(44, 95, 45, 0.35);
 }
 
 .actions {
@@ -113,7 +115,7 @@ body {
 
 .btn.primary {
   background: linear-gradient(180deg, var(--accent) 0%, var(--accent-dim) 100%);
-  border-color: #2d7a86;
+  border-color: #6e2f23;
   color: var(--accent-text);
   font-weight: 600;
 }
@@ -175,7 +177,7 @@ body {
   margin-top: 1rem;
   border: 1px dashed var(--border-soft);
   border-radius: 8px;
-  background: rgba(17, 24, 39, 0.65);
+  background: rgba(58, 47, 32, 0.04);
 }
 
 .debug-summary {
@@ -202,7 +204,7 @@ body {
   font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace;
   font-size: 0.75rem;
   line-height: 1.4;
-  color: #c4d4e8;
+  color: #4a4458;
 }
 
 .debug-line {

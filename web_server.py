@@ -23,6 +23,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from observability import log_event
 from orchestration import BooklyLiveAgent
 from prompts import OPENING_GREETING
 
@@ -65,6 +66,7 @@ async def _queue_mic_iter(
 @app.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
     await websocket.accept()
+    log_event("ws_accept", peer=str(websocket.client) if websocket.client else None)
     await websocket.send_json(
         {"type": "greeting", "text": OPENING_GREETING},
     )
@@ -78,48 +80,69 @@ async def voice_ws(websocket: WebSocket) -> None:
     agent = BooklyLiveAgent(modality="AUDIO")
 
     async def ws_reader() -> None:
+        reason = "loop_exit"
+        bytes_in = 0
         try:
             while True:
                 msg = await websocket.receive()
                 mtype = msg.get("type")
                 if mtype == "websocket.disconnect":
+                    reason = "client_disconnect"
                     break
                 if mtype != "websocket.receive":
                     continue
                 if msg.get("bytes") is not None:
                     b = msg["bytes"]
                     if b:
+                        bytes_in += len(b)
                         try:
                             in_q.put_nowait(b)
                         except asyncio.QueueFull:
-                            pass
+                            log_event("in_q_full")
                 elif msg.get("text"):
                     try:
                         data = json.loads(msg["text"])
                     except json.JSONDecodeError:
                         continue
                     if data.get("type") == "stop":
+                        reason = "client_stop"
                         break
         except WebSocketDisconnect:
-            pass
+            reason = "websocket_disconnect_exc"
         except asyncio.CancelledError:
+            log_event("ws_reader_exit", reason="cancelled", bytes_in=bytes_in)
+            raise
+        except Exception as e:
+            log_event("ws_reader_exit", reason="exception",
+                      error_type=type(e).__name__, error=str(e),
+                      bytes_in=bytes_in)
             raise
         finally:
+            log_event("ws_reader_exit", reason=reason, bytes_in=bytes_in)
             try:
                 in_q.put_nowait(None)
             except Exception:
                 pass
 
     async def pcm_pump() -> None:
+        bytes_out = 0
         try:
             while True:
                 b = await pcm_q.get()
                 if b is None:
-                    break
+                    log_event("pcm_pump_exit", reason="sentinel", bytes_out=bytes_out)
+                    return
+                bytes_out += len(b)
                 await websocket.send_bytes(b)
-        except (WebSocketDisconnect, asyncio.CancelledError):
+        except (WebSocketDisconnect, asyncio.CancelledError) as e:
+            log_event("pcm_pump_exit",
+                      reason="cancelled" if isinstance(e, asyncio.CancelledError) else "ws_disconnect",
+                      bytes_out=bytes_out)
             raise
-        except Exception:
+        except Exception as e:
+            log_event("pcm_pump_exit", reason="exception",
+                      error_type=type(e).__name__, error=str(e),
+                      bytes_out=bytes_out)
             return
 
     async def text_pump() -> None:
@@ -127,9 +150,13 @@ async def voice_ws(websocket: WebSocket) -> None:
             while True:
                 t = await text_out.get()
                 await websocket.send_json({"type": "agent_text", "text": t})
-        except (WebSocketDisconnect, asyncio.CancelledError):
+        except (WebSocketDisconnect, asyncio.CancelledError) as e:
+            log_event("text_pump_exit",
+                      reason="cancelled" if isinstance(e, asyncio.CancelledError) else "ws_disconnect")
             raise
-        except Exception:
+        except Exception as e:
+            log_event("text_pump_exit", reason="exception",
+                      error_type=type(e).__name__, error=str(e))
             return
 
     async def debug_pump() -> None:
@@ -137,9 +164,13 @@ async def voice_ws(websocket: WebSocket) -> None:
             while True:
                 payload = await debug_out.get()
                 await websocket.send_json(payload)
-        except (WebSocketDisconnect, asyncio.CancelledError):
+        except (WebSocketDisconnect, asyncio.CancelledError) as e:
+            log_event("debug_pump_exit",
+                      reason="cancelled" if isinstance(e, asyncio.CancelledError) else "ws_disconnect")
             raise
-        except Exception:
+        except Exception as e:
+            log_event("debug_pump_exit", reason="exception",
+                      error_type=type(e).__name__, error=str(e))
             return
 
     t_reader = asyncio.create_task(ws_reader())
@@ -154,13 +185,17 @@ async def voice_ws(websocket: WebSocket) -> None:
             text_out=text_out,
             debug_out=debug_out,
         )
+        log_event("run_voice_with_streams_returned", outcome="clean")
     except Exception as e:
+        log_event("run_voice_with_streams_returned", outcome="exception",
+                  error_type=type(e).__name__, error=str(e))
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
             pass
         raise
     finally:
+        log_event("voice_ws_teardown_start")
         for t in (t_reader, t_pcm, t_txt, t_dbg):
             t.cancel()
         try:
@@ -170,6 +205,7 @@ async def voice_ws(websocket: WebSocket) -> None:
         await asyncio.gather(
             t_reader, t_pcm, t_txt, t_dbg, return_exceptions=True,
         )
+        log_event("voice_ws_teardown_done")
 
 
 def main() -> None:

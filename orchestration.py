@@ -57,13 +57,46 @@ def _jsonish(value: Any) -> Any:
     return value
 
 
+def _session_memory_hint(session: Session) -> str | None:
+    """System addendum derived from SERVER-side Session state.
+
+    Only fires when the agent's Session is already verified — which can
+    only happen via:
+      (a) a verify_customer tool call earlier in this WebSocket session, or
+      (b) identity_cache.hydrate() restoring state from a prior
+          verify_customer call earlier in this server process.
+
+    Either path traces back to a tool call. The browser is never the
+    source. The hint just tells the model "the gate is already open"
+    so it doesn't re-ask for the email on every reconnect.
+
+    Internal customer_id is deliberately NOT exposed to the model —
+    those belong in tool outputs, not prompts.
+    """
+    if not session.is_verified():
+        return None
+    return (
+        "Session memory: this customer is already verified for the "
+        f"current session (email on file: {session.verified_email}). "
+        "Do NOT call verify_customer again or ask the customer for "
+        "their email. Greet them by their first name if natural and "
+        "go straight to helping them with their request. If they say "
+        "they're a different customer, then verify the new email."
+    )
+
+
 # ────────────────────────────────────────────────────────────────────────── #
 #  Build the Gemini Live config once.                                       #
 # ────────────────────────────────────────────────────────────────────────── #
-def _build_live_config(response_modality: str) -> types.LiveConnectConfig:
+def _build_live_config(
+    response_modality: str,
+    *,
+    memory_hint: str | None = None,
+) -> types.LiveConnectConfig:
     """`response_modality` is "AUDIO" or "TEXT". Both share the same
     system prompt, tools, and safety knobs — only the output channel
-    differs."""
+    differs. Optional ``memory_hint`` adds a second system Part for
+    server-derived session context (e.g. "user is already verified")."""
 
     declarations = [
         types.FunctionDeclaration(**fd) for fd in function_declarations()
@@ -77,11 +110,13 @@ def _build_live_config(response_modality: str) -> types.LiveConnectConfig:
         )
     )
 
+    parts: list[types.Part] = [types.Part(text=SYSTEM_PROMPT)]
+    if memory_hint:
+        parts.append(types.Part(text=memory_hint))
+
     return types.LiveConnectConfig(
         response_modalities=[response_modality],
-        system_instruction=types.Content(
-            parts=[types.Part(text=SYSTEM_PROMPT)],
-        ),
+        system_instruction=types.Content(parts=parts),
         tools=[types.Tool(function_declarations=declarations)],
         speech_config=speech_config if response_modality == "AUDIO" else None,
     )
@@ -126,7 +161,9 @@ class BooklyLiveAgent:
     #  Public: text mode (one turn at a time, no audio streaming)
     # ────────────────────────────────────────────────────────────── #
     async def run_text(self) -> None:
-        cfg = _build_live_config("TEXT")
+        cfg = _build_live_config(
+            "TEXT", memory_hint=_session_memory_hint(self.session),
+        )
         async with self.client.aio.live.connect(
             model=config.MODEL, config=cfg
         ) as live:
@@ -198,27 +235,56 @@ class BooklyLiveAgent:
         Optional ``debug_out`` receives structured tool-call / tool-response
         events for developer UIs (e.g. the browser debug panel)."""
 
-        cfg = _build_live_config("AUDIO")
+        cfg = _build_live_config(
+            "AUDIO", memory_hint=_session_memory_hint(self.session),
+        )
+        log_event("live_connect_attempt", model=config.MODEL,
+                  has_memory_hint=bool(_session_memory_hint(self.session)))
         async with self.client.aio.live.connect(
             model=config.MODEL, config=cfg
         ) as live:
+            log_event("live_connect_open")
 
             async def stream_mic() -> None:
-                async for chunk in mic_frames:
-                    await live.send_realtime_input(
-                        audio=types.Blob(
-                            data=chunk, mime_type=config.INPUT_MIME,
+                frames = 0
+                reason = "iterator_done"
+                try:
+                    async for chunk in mic_frames:
+                        frames += 1
+                        await live.send_realtime_input(
+                            audio=types.Blob(
+                                data=chunk, mime_type=config.INPUT_MIME,
+                            )
                         )
-                    )
+                except asyncio.CancelledError:
+                    log_event("stream_mic_exit", reason="cancelled", frames=frames)
+                    raise
+                except Exception as e:
+                    log_event("stream_mic_exit", reason="exception",
+                              error_type=type(e).__name__, error=str(e),
+                              frames=frames)
+                    raise
+                else:
+                    log_event("stream_mic_exit", reason=reason, frames=frames)
 
             async def receive() -> None:
-                await self._consume_turn(
-                    live,
-                    speaker=speaker,
-                    loop=True,
-                    text_out=text_out,
-                    debug_out=debug_out,
-                )
+                try:
+                    await self._consume_turn(
+                        live,
+                        speaker=speaker,
+                        loop=True,
+                        text_out=text_out,
+                        debug_out=debug_out,
+                    )
+                except asyncio.CancelledError:
+                    log_event("recv_task_exit", reason="cancelled")
+                    raise
+                except Exception as e:
+                    log_event("recv_task_exit", reason="exception",
+                              error_type=type(e).__name__, error=str(e))
+                    raise
+                else:
+                    log_event("recv_task_exit", reason="consume_turn_returned")
 
             mic_task = asyncio.create_task(stream_mic())
             recv_task = asyncio.create_task(receive())
@@ -227,6 +293,11 @@ class BooklyLiveAgent:
                     {mic_task, recv_task},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                for t in done:
+                    log_event(
+                        "task_finished_first",
+                        task="mic_task" if t is mic_task else "recv_task",
+                    )
                 for t in pending:
                     t.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
@@ -243,6 +314,7 @@ class BooklyLiveAgent:
                     mic_task, recv_task, return_exceptions=True,
                 )
                 return
+        log_event("live_connect_closed")
 
     # ────────────────────────────────────────────────────────────── #
     #  Inner loop — consume one or many model turns
@@ -259,54 +331,80 @@ class BooklyLiveAgent:
         # stops reading the socket, and the connection dies (keepalive ping
         # timeout while the mic task still runs).
         tool_iters = 0
-        async for response in live.receive():
-            # ── tool calls ─────────────────────────────────────── #
-            if response.tool_call:
-                tool_iters += 1
-                if tool_iters > config.MAX_TOOL_ITERS_PER_TURN:
-                    log_event("iter_cap_hit", tool_iters=tool_iters)
-                    break
-                await self._handle_tool_call(
-                    live,
-                    response.tool_call,
-                    debug_out=debug_out,
-                )
-                continue
-
-            sc = getattr(response, "server_content", None)
-            if not sc:
-                continue
-
-            # ── audio / text from the model ─────────────────────── #
-            model_turn = getattr(sc, "model_turn", None)
-            if model_turn:
-                for part in model_turn.parts:
-                    if part.inline_data and speaker is not None:
-                        # PCM audio chunk — stream straight to the speaker
-                        speaker.write(part.inline_data.data)
-                    if part.text:
-                        # ▶▶▶ Hook: pre_agent_response (text mode)
-                        d = guardrails.pre_agent_response(
-                            self.session, part.text,
+        turn_count = 0
+        responses_seen = 0
+        # IMPORTANT: live.receive() yields exactly ONE model turn's worth of
+        # messages (audio chunks, text, tool calls, then turn_complete) and
+        # then its iterator exhausts. The underlying WebSocket session stays
+        # open — to handle the next turn we have to call live.receive() again.
+        # Hence the outer `while True`. Voice mode (loop=True) keeps going
+        # forever; text mode (loop=False) returns after one turn_complete
+        # below and never loops.
+        while True:
+            iter_natural_end = False
+            try:
+                async for response in live.receive():
+                    responses_seen += 1
+                    # ── tool calls ─────────────────────────────────────── #
+                    if response.tool_call:
+                        tool_iters += 1
+                        if tool_iters > config.MAX_TOOL_ITERS_PER_TURN:
+                            log_event("iter_cap_hit", tool_iters=tool_iters)
+                            return
+                        await self._handle_tool_call(
+                            live,
+                            response.tool_call,
+                            debug_out=debug_out,
                         )
-                        out = d.speak_instead if not d.allow else d.payload
-                        if not d.allow:
-                            log_event("guardrail_block",
-                                      phase="pre_agent_response",
-                                      reason=d.reason)
-                        if print_text:
-                            print(f"\nAgent: {out}")
-                        if text_out is not None:
-                            try:
-                                text_out.put_nowait(out)
-                            except asyncio.QueueFull:
-                                pass
+                        continue
 
-            # End-of-turn marker — model is done speaking for now.
-            if getattr(sc, "turn_complete", False):
-                tool_iters = 0
-                if not loop:
-                    return
+                    sc = getattr(response, "server_content", None)
+                    if not sc:
+                        continue
+
+                    # ── audio / text from the model ─────────────────────── #
+                    model_turn = getattr(sc, "model_turn", None)
+                    if model_turn:
+                        for part in model_turn.parts:
+                            if part.inline_data and speaker is not None:
+                                # PCM audio chunk — stream straight to the speaker
+                                speaker.write(part.inline_data.data)
+                            if part.text:
+                                # ▶▶▶ Hook: pre_agent_response (text mode)
+                                d = guardrails.pre_agent_response(
+                                    self.session, part.text,
+                                )
+                                out = d.speak_instead if not d.allow else d.payload
+                                if not d.allow:
+                                    log_event("guardrail_block",
+                                              phase="pre_agent_response",
+                                              reason=d.reason)
+                                if print_text:
+                                    print(f"\nAgent: {out}")
+                                if text_out is not None:
+                                    try:
+                                        text_out.put_nowait(out)
+                                    except asyncio.QueueFull:
+                                        pass
+
+                    # End-of-turn marker — model is done speaking for now.
+                    if getattr(sc, "turn_complete", False):
+                        turn_count += 1
+                        log_event("turn_complete", turn=turn_count,
+                                  responses_seen=responses_seen)
+                        tool_iters = 0
+                        if not loop:
+                            return
+                iter_natural_end = True
+            finally:
+                log_event("live_receive_iterator_exit",
+                          turns=turn_count, responses_seen=responses_seen,
+                          loop_mode=loop, natural=iter_natural_end)
+            # If we get here, the per-turn iterator ended on its own. Voice
+            # mode loops back to re-engage live.receive() for the next turn;
+            # text mode exits.
+            if not loop:
+                return
 
     # ────────────────────────────────────────────────────────────── #
     #  Tool-call handler
