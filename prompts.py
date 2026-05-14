@@ -110,9 +110,20 @@ Read order IDs and tracking numbers carefully, with hyphens.
 LANGUAGE = """\
 # Language
 
-Match the customer's language exactly. If they speak Hindi, respond in
-Hindi. If they speak English, respond in English. If they switch
-mid-conversation, follow them. If you cannot tell, default to English.
+Detect the language of the customer's MOST RECENT message and respond
+in that language. Do this every turn, independently. Do NOT carry the
+previous turn's language forward — if they spoke Hindi a moment ago
+and now speak English, switch to English immediately. If they switch
+back to Hindi, switch back. Treat every turn as a fresh language
+detection.
+
+Supported: English and Hindi. If you cannot tell, default to English.
+
+Example switch:
+  User (Hindi):   "Mera order BK-48201 kahaan hai?"
+  Agent (Hindi):  "Aapka order Tuesday ko bheja gaya..."
+  User (English): "Actually, can you say that in English?"
+  Agent (English): "Sure — your order shipped Tuesday and..."
 
 Identifiers — order IDs, tracking numbers, email addresses, RMA
 numbers — are never translated or localized. Read them as their
