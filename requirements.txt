@@ -1,0 +1,4 @@
+google-genai>=0.3.0
+# Voice mode (optional — only needed for --voice)
+sounddevice>=0.4.6
+numpy>=1.26.0
