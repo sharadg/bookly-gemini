@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bookly — Voice</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <h1>Bookly assistant</h1>
+      <p class="sub">Voice in the browser · Gemini Live</p>
+    </header>
+    <section class="card">
+      <div class="toolbar">
+        <span id="status" class="pill idle" role="status">Idle</span>
+      </div>
+      <div class="actions">
+        <button id="btnStart" type="button" class="btn primary">Start voice</button>
+        <button id="btnStop" type="button" class="btn" disabled>Stop</button>
+      </div>
+      <p id="greeting" class="greeting muted">Connect to begin.</p>
+      <section class="transcript" aria-label="Transcript">
+        <h2>Transcript</h2>
+        <div id="log" class="log"></div>
+      </section>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
