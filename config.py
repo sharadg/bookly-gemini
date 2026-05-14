@@ -13,6 +13,11 @@ threading a constant through several files, add it here instead.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 # ────────────────────────────────────────────────────────────────────────── #
@@ -23,7 +28,7 @@ import os
 #   - "gemini-2.5-flash-preview-native-audio-dialog" (more natural prosody,
 #     preview)
 # Override via env BOOKLY_MODEL.
-MODEL = os.environ.get("BOOKLY_MODEL", "gemini-2.0-flash-live-001")
+MODEL = os.environ.get("BOOKLY_MODEL", "gemini-3.1-flash-live-preview")
 
 # API key. Required.
 API_KEY = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -37,7 +42,7 @@ API_VERSION = "v1beta"
 # ────────────────────────────────────────────────────────────────────────── #
 # Prebuilt voice options (Live API): Puck, Charon, Kore, Fenrir, Aoede,
 # Leda, Orus, Zephyr. Pick by listening — they differ in warmth and pace.
-VOICE = os.environ.get("BOOKLY_VOICE", "Aoede")
+VOICE = os.environ.get("BOOKLY_VOICE", "Zephyr")
 
 # Gemini Live audio I/O contract — do not change unless the API changes.
 INPUT_SAMPLE_RATE = 16_000   # PCM 16-bit mono, what the model expects
@@ -50,8 +55,9 @@ INPUT_MIME = f"audio/pcm;rate={INPUT_SAMPLE_RATE}"
 # ────────────────────────────────────────────────────────────────────────── #
 #  ORCHESTRATION                                                            #
 # ────────────────────────────────────────────────────────────────────────── #
-# Hard cap on tool-call iterations the agent may run without a new user
-# turn. Catches infinite loops; surfaces a graceful escalation instead.
+# Hard cap on server tool-call *batches* per assistant turn (each batch is
+# one `response.tool_call` from `live.receive()`, not each streaming chunk).
+# Catches infinite tool loops without breaking AUDIO streaming.
 MAX_TOOL_ITERS_PER_TURN = 5
 
 # Number of consecutive failed turns before forcing escalation.
