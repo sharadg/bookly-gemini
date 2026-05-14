@@ -101,9 +101,30 @@ Read order IDs and tracking numbers carefully, with hyphens.
 
 
 # ────────────────────────────────────────────────────────────────────────── #
+#  LANGUAGE                                                                 #
+# ────────────────────────────────────────────────────────────────────────── #
+# Gemini Live can speak many languages; we let the model mirror the
+# customer rather than pinning a single locale in SpeechConfig. The
+# only thing not localized: identifiers like order IDs, tracking
+# numbers, and email addresses — those stay in their literal form.
+LANGUAGE = """\
+# Language
+
+Match the customer's language exactly. If they speak Hindi, respond in
+Hindi. If they speak English, respond in English. If they switch
+mid-conversation, follow them. If you cannot tell, default to English.
+
+Identifiers — order IDs, tracking numbers, email addresses, RMA
+numbers — are never translated or localized. Read them as their
+literal characters (e.g. "B K dash 4 8 2 0 1") regardless of the
+surrounding language.
+"""
+
+
+# ────────────────────────────────────────────────────────────────────────── #
 #  COMPOSED SYSTEM PROMPT                                                   #
 # ────────────────────────────────────────────────────────────────────────── #
-SYSTEM_PROMPT = "\n".join([PERSONA, RULES, TONE, FORMAT])
+SYSTEM_PROMPT = "\n".join([PERSONA, RULES, TONE, FORMAT, LANGUAGE])
 
 
 # Greeting played at session open. Keep short — long greetings on voice

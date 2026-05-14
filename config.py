@@ -42,7 +42,7 @@ API_VERSION = "v1beta"
 # ────────────────────────────────────────────────────────────────────────── #
 # Prebuilt voice options (Live API): Puck, Charon, Kore, Fenrir, Aoede,
 # Leda, Orus, Zephyr. Pick by listening — they differ in warmth and pace.
-VOICE = os.environ.get("BOOKLY_VOICE", "Zephyr")
+VOICE = os.environ.get("BOOKLY_VOICE", "Kore")
 
 # Gemini Live audio I/O contract — do not change unless the API changes.
 INPUT_SAMPLE_RATE = 16_000   # PCM 16-bit mono, what the model expects
